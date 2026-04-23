@@ -1,0 +1,115 @@
+// SPDX-FileCopyrightText: Copyright 2025-2026 Arm Limited and/or its affiliates <open-source-office@arm.com>
+// SPDX-License-Identifier: Apache-2.0
+
+// Compute shader which produces high-quality ground truth textures for color and velocity, 
+// by downsampling the super-high resolution scene textures rendered by Unreal Engine.
+
+#include "/Engine/Private/Common.ush"
+#include "/Engine/Public/Platform.ush"
+#include "/Engine/Private/ScreenPass.ush"
+
+// Scene color rendered by Unreal Engine, will be super-high resolution
+SCREEN_PASS_TEXTURE_VIEWPORT(InSceneColor)
+SamplerState InSceneColor_Sampler;
+Texture2D InSceneColor_Texture;
+
+// Encoded velocity rendered by Unreal Engine, will be super-high resolution
+SCREEN_PASS_TEXTURE_VIEWPORT(InSceneVelocity)
+SamplerState InSceneVelocity_Sampler;
+Texture2D InSceneVelocity_Texture;
+
+// Depth rendered by Unreal Engine, will be super-high resolution
+SCREEN_PASS_TEXTURE_VIEWPORT(InSceneDepth)
+SamplerState InSceneDepth_Sampler;
+Texture2D InSceneDepth_Texture;
+
+// We will downsample (with a box-filter) the super-high resolution scene color and write it out here.
+RWTexture2D<float3> OutGroundTruthColor;
+// We will downsample (by taking the nearest-depth sample) the super-high resolution velocity and write it out here.
+RWTexture2D<float2> OutGroundTruthVelocity;
+
+float3 TonemapKaris(float3 Color)
+{
+    // 1 / (1 + max(rgb)) see https://graphicrants.blogspot.com/2013/12/tone-mapping.html
+	return Color / (1 + max(max(Color.r, Color.g), Color.b));
+}
+
+float3 InvertTonemapKaris(float3 Color)
+{
+	// 1 / (1 - max(rgb))
+	return Color / (1.0 - max(max(Color.r, Color.g), Color.b));
+}
+
+float2 ComputeStaticVelocity(float2 ScreenPos, float DeviceZ)
+{
+	float3 PosN = float3(ScreenPos, DeviceZ);
+
+	float4 ThisClip = float4(PosN, 1);
+	float4 PrevClip = mul( ThisClip, View.ClipToPrevClip );
+	float2 PrevScreen = PrevClip.xy / PrevClip.w;
+	return AdjustClipToPrevClipForProjectionType(PosN.xy - PrevScreen, DeviceZ);
+}
+
+[numthreads(8, 8, 1)]
+void GroundTruthCS(
+	uint2 GroupId : SV_GroupID,
+	uint2 DispatchThreadId : SV_DispatchThreadID,
+	uint2 GroupThreadId : SV_GroupThreadID,
+	uint GroupIndex : SV_GroupIndex)
+{
+	uint2 OutputIdx = DispatchThreadId.xy;
+	
+	// Skip pixels outside the output textures
+	uint OutputWidth, OutputHeight;
+	OutGroundTruthColor.GetDimensions(OutputWidth, OutputHeight); // We assume both output textures are the same size
+	uint2 OutputSize = uint2(OutputWidth, OutputHeight);
+	if (any(OutputIdx >= OutputSize))
+	{
+		return;
+	}
+	
+	// Note this division assumes that the sizes are an exact multiple, which should always be the case
+	uint2 DownsampleRatio = InSceneColor_ViewportSize / uint2(OutputWidth, OutputHeight);
+
+	// Loop over the (e.g.) 2x2 box of high-res pixels to average out the colours.
+	// Also find the closest depth pixel which is where we will take the velocity from
+	uint2 TopLeftInputIdx = OutputIdx * DownsampleRatio; // Corner of the box we are filtering over
+	float3 AverageTonemappedColor = 0.0f;
+	float AveragingScale = 1.0f / (DownsampleRatio.x * DownsampleRatio.y);
+	uint2 ClosestIdx = TopLeftInputIdx;
+	float ClosestDepth = 0; // Higher depth -> closer
+
+	for (uint Y = 0; Y < DownsampleRatio.y; ++Y)
+	{
+		for (uint X = 0; X < DownsampleRatio.x; ++X)
+		{
+			uint2 Idx = TopLeftInputIdx + uint2(X, Y);
+			
+			float3 LinearColor = InSceneColor_Texture.Load(int3(Idx + InSceneColor_ViewportMin, 0)).rgb;
+			LinearColor = max(0.0f, LinearColor);
+			float3 Tonemapped = TonemapKaris(LinearColor);
+			AverageTonemappedColor += Tonemapped * AveragingScale;
+			
+			float Depth = InSceneDepth_Texture.Load(int3(Idx + InSceneDepth_ViewportMin, 0)).r;
+			if (Depth > ClosestDepth)
+			{
+				ClosestIdx = Idx;
+				ClosestDepth = Depth;
+			}
+		}
+	}
+
+	OutGroundTruthColor[OutputIdx] = InvertTonemapKaris(AverageTonemappedColor);
+
+	// Sample the velocity at the location of the nearest depth
+	float4 EncodedVelocity = InSceneVelocity_Texture.Load(int3(ClosestIdx + InSceneVelocity_ViewportMin, 0));
+	// Decode Unreal Engine's motion vector format (static objects don't have rendered velocity, so calculate it from camera motion)
+	float2 ScreenPos = (ClosestIdx - InSceneVelocity_ScreenPosToViewportBias) / InSceneVelocity_ScreenPosToViewportScale;
+	float2 ScreenVelocity = ComputeStaticVelocity(ScreenPos, ClosestDepth);
+	bool bIsRenderedVelocity = EncodedVelocity.x > 0.0;
+	if (bIsRenderedVelocity)
+	{
+		ScreenVelocity = DecodeVelocityFromTexture(EncodedVelocity).xy;
+	}
+	OutGroundTruthVelocity[OutputIdx] = ScreenVelocity * float2(0.5, -0.5); // Scale/flip to match the NSS dataset spec expectations
+}

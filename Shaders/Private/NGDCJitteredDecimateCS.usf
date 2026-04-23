@@ -1,0 +1,78 @@
+// SPDX-FileCopyrightText: Copyright 2025-2026 Arm Limited and/or its affiliates <open-source-office@arm.com>
+// SPDX-License-Identifier: Apache-2.0
+
+// Produces low resolution jittered textures to be used as inputs to NSS by downsampling
+// the super-high resolution scene textures rendered by Unreal Engine.
+
+#include "/Engine/Private/Common.ush"
+#include "/Engine/Public/Platform.ush"
+#include "/Engine/Private/ScreenPass.ush"
+
+// Scene color rendered by Unreal Engine, will be super-high resolution
+SCREEN_PASS_TEXTURE_VIEWPORT(InSceneColor)
+SamplerState InSceneColor_Sampler;
+Texture2D InSceneColor_Texture;
+
+// Encoded velocity rendered by Unreal Engine, will be super-high resolution
+SCREEN_PASS_TEXTURE_VIEWPORT(InSceneVelocity)
+SamplerState InSceneVelocity_Sampler;
+Texture2D InSceneVelocity_Texture;
+
+// Depth rendered by Unreal Engine, will be super-high resolution
+SCREEN_PASS_TEXTURE_VIEWPORT(InSceneDepth)
+SamplerState InSceneDepth_Sampler;
+Texture2D InSceneDepth_Texture;
+
+float2 JitterPixelsLowRes; // In the low-res space, so between -0.5 and +0.5
+
+// We will downsample the super-high resolution input textures by point sampling
+// at locations based on the jitter offset and write out these resulting decimated textures.
+RWTexture2D<float3> OutJitteredColor;
+RWTexture2D<float> OutJitteredDepth;
+RWTexture2D<float2> OutJitteredVelocity;
+
+float2 ComputeStaticVelocity(float2 ScreenPos, float DeviceZ)
+{
+	float3 PosN = float3(ScreenPos, DeviceZ);
+
+	float4 ThisClip = float4(PosN, 1);
+	float4 PrevClip = mul( ThisClip, View.ClipToPrevClip );
+	float2 PrevScreen = PrevClip.xy / PrevClip.w;
+	return AdjustClipToPrevClipForProjectionType(PosN.xy - PrevScreen, DeviceZ);
+}
+
+[numthreads(8, 8, 1)]
+void JitteredDecimateCS(
+	uint2 GroupId : SV_GroupID,
+	uint2 DispatchThreadId : SV_DispatchThreadID,
+	uint2 GroupThreadId : SV_GroupThreadID,
+	uint GroupIndex : SV_GroupIndex)
+{
+	uint2 OutputIdx = DispatchThreadId.xy;
+
+	// Skip pixels outside the output textures
+	uint OutputWidth, OutputHeight;
+	OutJitteredColor.GetDimensions(OutputWidth, OutputHeight); // We assume all output textures are the same size
+	uint2 OutputSize = uint2(OutputWidth, OutputHeight);
+	if (any(OutputIdx >= OutputSize))
+	{
+		return;
+	}
+	
+	uint2 InputIdx = (OutputIdx + 0.5f + JitterPixelsLowRes) / (float2) OutputSize * InSceneColor_ViewportSize; // We assume all the input textures have the same viewport size
+
+	OutJitteredColor[OutputIdx] = InSceneColor_Texture.Load(int3(InputIdx + InSceneColor_ViewportMin, 0)).rgb;
+	float Depth = InSceneDepth_Texture.Load(int3(InputIdx + InSceneDepth_ViewportMin, 0)).r;
+	OutJitteredDepth[OutputIdx] = Depth;
+
+	float4 EncodedVelocity = InSceneVelocity_Texture.Load(int3(InputIdx + InSceneVelocity_ViewportMin, 0));
+	// Decode Unreal Engine's motion vector format (static objects don't have rendered velocity, so calculate it from camera motion)
+	float2 ScreenPos = (InputIdx - InSceneVelocity_ScreenPosToViewportBias) / InSceneVelocity_ScreenPosToViewportScale;
+	float2 ScreenVelocity = ComputeStaticVelocity(ScreenPos, Depth);
+	bool bIsRenderedVelocity = EncodedVelocity.x > 0.0;
+	if (bIsRenderedVelocity)
+	{
+		ScreenVelocity = DecodeVelocityFromTexture(EncodedVelocity).xy;
+	}
+	OutJitteredVelocity[OutputIdx] = ScreenVelocity * float2(0.5, -0.5); // Scale/flip to match the NSS dataset spec expectations
+}
