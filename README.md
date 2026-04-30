@@ -11,6 +11,8 @@ The Neural Graphics Data Capture plugin is a runtime Unreal® Engine plugin for 
 
 Datasets captured with this plugin can be used as input to the [Neural Graphics Model Gym](https://github.com/arm/neural-graphics-model-gym) to train or finetune neural graphics models, such as [Neural Super Sampling](https://huggingface.co/Arm/neural-super-sampling). Specifically, see [this](https://github.com/arm/neural-graphics-model-gym/blob/main/docs/nss/nss_data_generation.md) document on how to convert your captured dataset to a format compatible with the Model Gym.
 
+A learning path on how to get started with the plugin is available [here.](https://learn.arm.com/learning-paths/mobile-graphics-and-gaming/neural-graphics-data-capture-unreal)
+
 ## Quick Setup
 
 1. Copy this folder into the `Plugins/` folder in either your Unreal® `Engine` folder or your project folder.
