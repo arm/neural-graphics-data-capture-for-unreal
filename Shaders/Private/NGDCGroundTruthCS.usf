@@ -7,6 +7,7 @@
 #include "/Engine/Private/Common.ush"
 #include "/Engine/Public/Platform.ush"
 #include "/Engine/Private/ScreenPass.ush"
+#include "/Plugin/NeuralGraphicsDataCapture/Private/NGDCVelocityCommon.ush"
 
 // Scene color rendered by Unreal Engine, will be super-high resolution
 SCREEN_PASS_TEXTURE_VIEWPORT(InSceneColor)
@@ -47,7 +48,7 @@ float2 ComputeStaticVelocity(float2 ScreenPos, float DeviceZ)
 	float4 ThisClip = float4(PosN, 1);
 	float4 PrevClip = mul( ThisClip, View.ClipToPrevClip );
 	float2 PrevScreen = PrevClip.xy / PrevClip.w;
-	return AdjustClipToPrevClipForProjectionType(PosN.xy - PrevScreen, DeviceZ);
+	return NGDCAdjustClipToPrevClipForProjectionType(PosN.xy - PrevScreen, DeviceZ);
 }
 
 [numthreads(8, 8, 1)]

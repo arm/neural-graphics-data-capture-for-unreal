@@ -5,6 +5,7 @@
 
 #include "NeuralGraphicsDataCaptureModule.h"
 #include "RenderGraph.h"
+#include "Runtime/Launch/Resources/Version.h"
 #include "Containers/StringConv.h"
 #include "HAL/FileManager.h"
 #include "GenericPlatform/GenericPlatformProcess.h"
@@ -201,7 +202,11 @@ void FNGDCExport::AppendFrameToJson(FCapturedFrame Frame)
 	}
 
 	JsonWriter->WriteObjectStart();
+#if (ENGINE_MAJOR_VERSION > 5) || (ENGINE_MAJOR_VERSION == 5 && ENGINE_MINOR_VERSION >= 5)
 	JsonWriter->WriteValue("FrameNumber", Frame.FrameNumber);
+#else
+	JsonWriter->WriteValue("FrameNumber", static_cast<uint64>(Frame.FrameNumber));
+#endif
 	JsonWriter->WriteValue("FovX", Frame.FovXRadians);
 	JsonWriter->WriteValue("FovY", Frame.FovYRadians);
 	JsonWriter->WriteValue("CameraNearPlane", Frame.NearClippingDistance);
@@ -281,7 +286,11 @@ void FNGDCExport::QueueTextureExport(FRDGBuilder& GraphBuilder, FRDGTextureRef T
 		RDG_EVENT_NAME("EnqueueCopy(%s)", Texture->Name),
 		PassParameters,
 		ERDGPassFlags::Readback,
+#if (ENGINE_MAJOR_VERSION > 5) || (ENGINE_MAJOR_VERSION == 5 && ENGINE_MINOR_VERSION >= 5)
 		[QueueEntry, Texture](FRDGAsyncTask, FRHICommandList& RHICmdList)
+#else
+		[QueueEntry, Texture](FRHICommandList& RHICmdList)
+#endif
 		{
 			QueueEntry->Readback.EnqueueCopy(RHICmdList, Texture->GetRHI());
 			QueueEntry->bIsReadbackEnqueued = true;
