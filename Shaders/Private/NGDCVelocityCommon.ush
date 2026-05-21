@@ -1,0 +1,36 @@
+// SPDX-FileCopyrightText: Copyright 2026 Arm Limited and/or its affiliates <open-source-office@arm.com>
+// SPDX-License-Identifier: Apache-2.0
+
+#ifndef NGDC_VELOCITY_COMMON_USH
+#define NGDC_VELOCITY_COMMON_USH
+
+#ifndef UNREAL_ENGINE_MAJOR_VERSION
+#define UNREAL_ENGINE_MAJOR_VERSION 0
+#endif
+
+#ifndef UNREAL_ENGINE_MINOR_VERSION
+#define UNREAL_ENGINE_MINOR_VERSION 0
+#endif
+
+#if (UNREAL_ENGINE_MAJOR_VERSION > 5) || (UNREAL_ENGINE_MAJOR_VERSION == 5 && UNREAL_ENGINE_MINOR_VERSION >= 5)
+#define NGDC_USE_ENGINE_ADJUST_CLIP_TO_PREV_CLIP 1
+#else
+#define NGDC_USE_ENGINE_ADJUST_CLIP_TO_PREV_CLIP 0
+#endif
+
+float2 NGDCAdjustClipToPrevClipForProjectionType(float2 Velocity, float DeviceZ)
+{
+#if NGDC_USE_ENGINE_ADJUST_CLIP_TO_PREV_CLIP
+	return AdjustClipToPrevClipForProjectionType(Velocity, DeviceZ);
+#else
+	
+#if HAS_INVERTED_Z_BUFFER
+	return IsOrthoProjection() ? Velocity*DeviceZ : Velocity;
+#else
+    return IsOrthoProjection() ? 1.0f - DeviceZ : Velocity;
+#endif	// HAS_INVERTED_Z_BUFFER
+	
+#endif //  NGDC_USE_ENGINE_ADJUST_CLIP_TO_PREV_CLIP
+}
+
+#endif // NGDC_VELOCITY_COMMON_USH

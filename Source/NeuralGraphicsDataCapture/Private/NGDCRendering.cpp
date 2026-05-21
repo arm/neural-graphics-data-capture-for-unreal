@@ -15,10 +15,34 @@
 #include "Math/UnrealMathUtility.h"
 #include "CanvasItem.h"
 #include "Engine/GameViewportClient.h"
+#include "Runtime/Launch/Resources/Version.h"
 
 #if NGDC_DEBUGGING_ENABLED
 UE_DISABLE_OPTIMIZATION
 #endif
+
+static void ModifyNGDCShaderCompilationEnvironment(
+	const FGlobalShaderPermutationParameters& Parameters,
+	FShaderCompilerEnvironment& OutEnvironment)
+{
+	FGlobalShader::ModifyCompilationEnvironment(Parameters, OutEnvironment);
+	OutEnvironment.SetDefine(TEXT("UNREAL_ENGINE_MAJOR_VERSION"), ENGINE_MAJOR_VERSION);
+	OutEnvironment.SetDefine(TEXT("UNREAL_ENGINE_MINOR_VERSION"), ENGINE_MINOR_VERSION);
+	OutEnvironment.SetDefine(TEXT("UNREAL_ENGINE_PATCH_VERSION"), ENGINE_PATCH_VERSION);
+}
+
+namespace
+{
+// AddDrawTexturePass changed from FSceneView to FScreenPassViewInfo in UE 5.5, so keep the call sites explicit per engine version.
+inline void AddNGDCDrawTexturePass(FRDGBuilder& GraphBuilder, const FSceneView& View, FScreenPassTexture Input, FScreenPassRenderTarget Output)
+{
+#if (ENGINE_MAJOR_VERSION > 5) || (ENGINE_MAJOR_VERSION == 5 && ENGINE_MINOR_VERSION >= 5)
+	AddDrawTexturePass(GraphBuilder, FScreenPassViewInfo(View), Input, Output);
+#else
+	AddDrawTexturePass(GraphBuilder, View, Input, Output);
+#endif
+}
+}
 
 bool FNGDCRenderingSettings::Validate(TArray<FString>& OutErrors) const
 {
@@ -67,6 +91,11 @@ public:
 		SHADER_PARAMETER_RDG_TEXTURE_UAV(RWTexture2D, OutGroundTruthColor)
 		SHADER_PARAMETER_RDG_TEXTURE_UAV(RWTexture2D, OutGroundTruthVelocity)
 	END_SHADER_PARAMETER_STRUCT()
+
+	static void ModifyCompilationEnvironment(const FGlobalShaderPermutationParameters& Parameters, FShaderCompilerEnvironment& OutEnvironment)
+	{
+		ModifyNGDCShaderCompilationEnvironment(Parameters, OutEnvironment);
+	}
 };
 
 IMPLEMENT_GLOBAL_SHADER(FNGDCGroundTruthCS, "/Plugin/NeuralGraphicsDataCapture/Private/NGDCGroundTruthCS.usf", "GroundTruthCS", SF_Compute);
@@ -89,6 +118,11 @@ public:
 		SHADER_PARAMETER_RDG_TEXTURE_UAV(RWTexture2D, OutJitteredDepth)
 		SHADER_PARAMETER_RDG_TEXTURE_UAV(RWTexture2D, OutJitteredVelocity)
 	END_SHADER_PARAMETER_STRUCT()
+
+	static void ModifyCompilationEnvironment(const FGlobalShaderPermutationParameters& Parameters, FShaderCompilerEnvironment& OutEnvironment)
+	{
+		ModifyNGDCShaderCompilationEnvironment(Parameters, OutEnvironment);
+	}
 };
 
 IMPLEMENT_GLOBAL_SHADER(FNGDCJitteredDecimateCS, "/Plugin/NeuralGraphicsDataCapture/Private/NGDCJitteredDecimateCS.usf", "JitteredDecimateCS", SF_Compute);
@@ -125,7 +159,11 @@ private:
 	class FHistory : public IHistory, FRefCountBase
 	{
 	public:
+#if (ENGINE_MAJOR_VERSION > 5) || (ENGINE_MAJOR_VERSION == 5 && ENGINE_MINOR_VERSION >= 6)
+		FReturnedRefCountValue AddRef() const final
+#else
 		uint32 AddRef() const final
+#endif
 		{
 			return FRefCountBase::AddRef();
 		}
@@ -168,7 +206,7 @@ private:
 			FOutputs Outputs;
 			FRDGTextureDesc DummyOutputDesc(ETextureDimension::Texture2D, ETextureCreateFlags::ShaderResource | ETextureCreateFlags::RenderTargetable, EPixelFormat::PF_FloatRGBA, FClearValueBinding(), Inputs.OutputViewRect.Size(), 1, 1, 1, 1, 0);
 			FRDGTextureRef DummyOutput = GraphBuilder.CreateTexture(DummyOutputDesc, TEXT("DummyOutput"));
-			AddDrawTexturePass(GraphBuilder, FScreenPassViewInfo(View), Inputs.SceneColor, FScreenPassRenderTarget(DummyOutput, ERenderTargetLoadAction::ENoAction));
+			AddNGDCDrawTexturePass(GraphBuilder, View, Inputs.SceneColor, FScreenPassRenderTarget(DummyOutput, ERenderTargetLoadAction::ENoAction));
 			Outputs.FullRes = FScreenPassTexture(DummyOutput);
 			Outputs.NewHistory = MakeRefCount<FHistory>();
 			return Outputs;
@@ -202,7 +240,7 @@ private:
 			FOutputs Outputs;
 			FRDGTextureDesc DummyOutputDesc(ETextureDimension::Texture2D, ETextureCreateFlags::ShaderResource | ETextureCreateFlags::RenderTargetable, EPixelFormat::PF_FloatRGBA, FClearValueBinding(), GroundTruthSize, 1, 1, 1, 1, 0);
 			FRDGTextureRef DummyOutput = GraphBuilder.CreateTexture(DummyOutputDesc, TEXT("DummyOutput"));
-			AddDrawTexturePass(GraphBuilder, FScreenPassViewInfo(View), Inputs.SceneColor, FScreenPassRenderTarget(DummyOutput, ERenderTargetLoadAction::ENoAction));
+			AddNGDCDrawTexturePass(GraphBuilder, View, Inputs.SceneColor, FScreenPassRenderTarget(DummyOutput, ERenderTargetLoadAction::ENoAction));
 			Outputs.FullRes = FScreenPassTexture(DummyOutput);
 			Outputs.NewHistory = MakeRefCount<FHistory>();
 			return Outputs;
@@ -277,7 +315,7 @@ private:
 		// as we only capture from one view.
 		FRDGTextureDesc OutputDesc(ETextureDimension::Texture2D, ETextureCreateFlags::ShaderResource | ETextureCreateFlags::RenderTargetable, EPixelFormat::PF_FloatRGBA, FClearValueBinding(), Inputs.OutputViewRect.Size(), 1, 1, 1, 1, 0);
 		FRDGTextureRef Output = GraphBuilder.CreateTexture(OutputDesc, TEXT("NGDCOutput"));
-		AddDrawTexturePass(GraphBuilder, FScreenPassViewInfo(View), Inputs.SceneColor, FScreenPassRenderTarget(Output, ERenderTargetLoadAction::ENoAction));
+		AddNGDCDrawTexturePass(GraphBuilder, View, Inputs.SceneColor, FScreenPassRenderTarget(Output, ERenderTargetLoadAction::ENoAction));
 		AddDrawCanvasPass(GraphBuilder,
 			FRDGEventName(TEXT("NGDC Text Overlay")),
 			View,
